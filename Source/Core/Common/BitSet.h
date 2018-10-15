@@ -193,6 +193,7 @@ public:
   constexpr BitSet operator&(BitSet other) const { return BitSet(m_val & other.m_val); }
   constexpr BitSet operator^(BitSet other) const { return BitSet(m_val ^ other.m_val); }
   constexpr BitSet operator~() const { return BitSet(~m_val); }
+  constexpr BitSet operator<<(IntTy shift) const { return BitSet(m_val << shift); }
   constexpr explicit operator bool() const { return m_val != 0; }
   BitSet& operator|=(BitSet other) { return *this = *this | other; }
   BitSet& operator&=(BitSet other) { return *this = *this & other; }
