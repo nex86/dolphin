@@ -392,16 +392,16 @@ void Jit64::fsign(UGeckoInstruction inst)
   switch (inst.SUBOP10)
   {
   case 40:  // neg
-    avx_op(&XEmitter::VXORPD, &XEmitter::XORPD, Rd, src,
-           MConst(packed ? psSignBits2 : psSignBits), packed);
+    avx_op(&XEmitter::VXORPD, &XEmitter::XORPD, Rd, src, MConst(packed ? psSignBits2 : psSignBits),
+           packed);
     break;
   case 136:  // nabs
-    avx_op(&XEmitter::VORPD, &XEmitter::ORPD, Rd, src,
-           MConst(packed ? psSignBits2 : psSignBits), packed);
+    avx_op(&XEmitter::VORPD, &XEmitter::ORPD, Rd, src, MConst(packed ? psSignBits2 : psSignBits),
+           packed);
     break;
   case 264:  // abs
-    avx_op(&XEmitter::VANDPD, &XEmitter::ANDPD, Rd, src,
-           MConst(packed ? psAbsMask2 : psAbsMask), packed);
+    avx_op(&XEmitter::VANDPD, &XEmitter::ANDPD, Rd, src, MConst(packed ? psAbsMask2 : psAbsMask),
+           packed);
     break;
   default:
     PanicAlert("fsign bleh");
