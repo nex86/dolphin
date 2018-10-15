@@ -389,8 +389,8 @@ void RegCache::Flush(BitSet32 pregs)
 
   for (preg_t i : pregs)
   {
-    ASSERT_MSG(DYNA_REC, !m_regs[i].IsLocked(), "Someone forgot to unlock PPC reg %zu (X64 reg %i).",
-               i, RX(i));
+    ASSERT_MSG(DYNA_REC, !m_regs[i].IsLocked(),
+               "Someone forgot to unlock PPC reg %zu (X64 reg %i).", i, RX(i));
     ASSERT_MSG(DYNA_REC, !m_regs[i].IsRevertable(), "Register transaction is in progress!");
 
     switch (m_regs[i].GetLocationType())
@@ -433,8 +433,8 @@ void RegCache::Commit()
 
 bool RegCache::IsAllUnlocked() const
 {
-  return std::none_of(m_regs.begin(), m_regs.end(), [](const auto& r){ return r.IsLocked(); }) &&
-         std::none_of(m_xregs.begin(), m_xregs.end(), [](const auto& x){ return x.IsLocked(); }) &&
+  return std::none_of(m_regs.begin(), m_regs.end(), [](const auto& r) { return r.IsLocked(); }) &&
+         std::none_of(m_xregs.begin(), m_xregs.end(), [](const auto& x) { return x.IsLocked(); }) &&
          !IsAnyConstraintActive();
 }
 
