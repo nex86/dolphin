@@ -205,8 +205,8 @@ RCX64Reg::~RCX64Reg()
 }
 
 RCX64Reg::RCX64Reg(RCX64Reg&& other) noexcept
-    : rc(std::exchange(other.rc, nullptr))
-    , contents(std::exchange(other.contents, std::monostate{}))
+    : rc(std::exchange(other.rc, nullptr)),
+      contents(std::exchange(other.contents, std::monostate{}))
 {
 }
 
