@@ -655,7 +655,7 @@ void Jit64::mffsx(UGeckoInstruction inst)
   MOV(32, PPCSTATE(fpscr), R(RSCRATCH));
 
   int d = inst.FD;
-  RCX64Reg Rd = gpr.Bind(d, RCMode::Write);
+  RCX64Reg Rd = fpr.Bind(d, RCMode::Write);
   RegCache::Realize(Rd);
   MOV(64, R(RSCRATCH2), Imm64(0xFFF8000000000000));
   OR(64, R(RSCRATCH), R(RSCRATCH2));
