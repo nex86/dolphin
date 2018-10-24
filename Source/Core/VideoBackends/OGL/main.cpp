@@ -163,7 +163,7 @@ bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
   InitializeShared();
 
   std::unique_ptr<GLContext> main_gl_context =
-      GLContext::Create(wsi, false, Config::Get(Config::GFX_PREFER_GLES));
+      GLContext::Create(wsi, true, false, Config::Get(Config::GFX_PREFER_GLES));
   if (!main_gl_context)
     return false;
 
