@@ -36,7 +36,7 @@ namespace OpcodeDecoder
 {
 static bool s_bFifoErrorSeen = false;
 
-static u32 InterpretDisplayList(u32 address, u32 size)
+u32 InterpretDisplayList(u32 address, u32 size)
 {
   u8* startAddress;
 

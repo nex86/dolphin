@@ -30,6 +30,7 @@
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/Statistics.h"
+#include "VideoCommon/XFMemory.h"
 namespace Fifo
 {
 static constexpr u32 FIFO_SIZE = 2 * 1024 * 1024;
@@ -221,63 +222,6 @@ void* PopFifoAuxBuffer(size_t size)
   return ret;
 }
 
-DataReader ReadVerticesFromFifo(u32 have_size, u32 need_size)
-{
-    CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
-    need_size = (need_size + 0x1F) & ~0x1F;
-    if(need_size > fifo.CPReadWriteDistance)
-    {
-        need_size = fifo.CPReadWriteDistance;
-    }
-
-    u32 step_size = 32;
-    u32 page_size = fifo.CPEnd - fifo.CPReadPointer + 32;
-    fifo.CPReadPointer += step_size - have_size;
-    if(page_size < need_size)
-    {
-        u32 remain_size = need_size - page_size;
-        u32 buff_size = s_video_buffer + FIFO_SIZE - s_video_buffer_write_ptr;
-        if(buff_size < need_size)
-        {
-            // move memory
-            s_video_buffer_read_ptr += step_size - have_size;
-            memmove(s_video_buffer, s_video_buffer_read_ptr, have_size);
-            s_video_buffer_read_ptr = s_video_buffer;
-            s_video_buffer_write_ptr = s_video_buffer + have_size;
-        }
-        else
-        {
-            s_video_buffer_read_ptr += step_size - have_size;
-        }
-
-        // read current page
-        Memory::CopyFromEmu(s_video_buffer_write_ptr, fifo.CPReadPointer, page_size);
-        s_video_buffer_write_ptr += page_size;
-        fifo.CPReadPointer = fifo.CPBase;
-
-        // read next page
-        Memory::CopyFromEmu(s_video_buffer_write_ptr, fifo.CPReadPointer, remain_size);
-        s_video_buffer_write_ptr += remain_size;
-        fifo.CPReadPointer += remain_size;
-
-        u8* start_ptr = s_video_buffer_read_ptr;
-        // clear read buffer
-        s_video_buffer_read_ptr = s_video_buffer_write_ptr;
-        fifo.CPReadWriteDistance -= step_size + need_size;
-        return DataReader(start_ptr, s_video_buffer_write_ptr);
-    }
-    else
-    {
-        u8* start_ptr = Memory::GetPointer(fifo.CPReadPointer);
-        fifo.CPReadPointer += have_size + need_size;
-        u8* end_ptr = Memory::GetPointer(fifo.CPReadPointer);
-        // clear read buffer
-        s_video_buffer_read_ptr = s_video_buffer_write_ptr;
-        fifo.CPReadWriteDistance -= step_size + need_size;
-        return DataReader(start_ptr, end_ptr);
-    }
-}
-
 // Description: RunGpuLoop() sends data through this function.
 static u32 ReadDataFromFifo(u32 readPtr, u32 len = 32)
 {
@@ -345,6 +289,235 @@ void ResetVideoBuffer()
   s_fifo_aux_read_ptr = s_fifo_aux_data;
 }
 
+DataReader ReadVerticesFromFifo(u32 have_size, u32 need_size)
+{
+  CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
+  need_size = (need_size + 0x1F) & ~0x1F;
+  if (need_size > fifo.CPReadWriteDistance)
+  {
+    need_size = fifo.CPReadWriteDistance;
+  }
+
+  u32 step_size = 32;
+  u32 page_size = fifo.CPEnd - fifo.CPReadPointer + 32;
+  fifo.CPReadPointer += step_size - have_size;
+  if (page_size < need_size)
+  {
+    u32 remain_size = need_size - page_size;
+    u32 buff_size = s_video_buffer + FIFO_SIZE - s_video_buffer_write_ptr;
+    if (buff_size < need_size)
+    {
+      // move memory
+      s_video_buffer_read_ptr += step_size - have_size;
+      memmove(s_video_buffer, s_video_buffer_read_ptr, have_size);
+      s_video_buffer_read_ptr = s_video_buffer;
+      s_video_buffer_write_ptr = s_video_buffer + have_size;
+    }
+    else
+    {
+      s_video_buffer_read_ptr += step_size - have_size;
+    }
+
+    // read current page
+    Memory::CopyFromEmu(s_video_buffer_write_ptr, fifo.CPReadPointer, page_size);
+    s_video_buffer_write_ptr += page_size;
+    fifo.CPReadPointer = fifo.CPBase;
+
+    // read next page
+    Memory::CopyFromEmu(s_video_buffer_write_ptr, fifo.CPReadPointer, remain_size);
+    s_video_buffer_write_ptr += remain_size;
+    fifo.CPReadPointer += remain_size;
+
+    u8* start_ptr = s_video_buffer_read_ptr;
+    // clear read buffer
+    s_video_buffer_read_ptr = s_video_buffer_write_ptr;
+    fifo.CPReadWriteDistance -= step_size + need_size;
+    return DataReader(start_ptr, s_video_buffer_write_ptr);
+  }
+  else
+  {
+    u8* start_ptr = Memory::GetPointer(fifo.CPReadPointer);
+    fifo.CPReadPointer += have_size + need_size;
+    u8* end_ptr = Memory::GetPointer(fifo.CPReadPointer);
+    // clear read buffer
+    s_video_buffer_read_ptr = s_video_buffer_write_ptr;
+    fifo.CPReadWriteDistance -= step_size + need_size;
+    return DataReader(start_ptr, end_ptr);
+  }
+}
+
+void OpcodeDecoderRun(u32& cycles)
+{
+  CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
+  u32 readPtr = fifo.CPReadPointer;
+  u32 stepSize = ReadDataFromFifo(readPtr);
+  u8* start_ptr = s_video_buffer_read_ptr;
+  u8* end_ptr = s_video_buffer_write_ptr;
+
+  if (readPtr == fifo.CPEnd)
+    readPtr = fifo.CPBase;
+  else
+    readPtr += stepSize;
+
+  Common::AtomicStore(fifo.CPReadPointer, readPtr);
+  Common::AtomicAdd(fifo.CPReadWriteDistance, -(s32)stepSize);
+
+  u32 totalCycles = 0;
+  int refarray;
+  u8* opcodeStart;
+  while (true)
+  {
+    opcodeStart = start_ptr;
+
+    if (start_ptr == end_ptr)
+    {
+      Common::AtomicStore(fifo.SafeCPReadPointer, fifo.CPReadPointer);
+      goto end;
+    }
+
+    u8 cmd_byte = *start_ptr;
+    start_ptr += 1;
+
+    switch (cmd_byte)
+    {
+    case OpcodeDecoder::GX_NOP:
+      totalCycles += 6;  // Hm, this means that we scan over nop streams pretty slowly...
+      break;
+
+    case OpcodeDecoder::GX_UNKNOWN_RESET:
+      totalCycles += 6;  // Datel software uses this command
+      DEBUG_LOG(VIDEO, "GX Reset?: %08x", cmd_byte);
+      break;
+
+    case OpcodeDecoder::GX_LOAD_CP_REG:
+    {
+      if (end_ptr - start_ptr < 1 + 4)
+        goto end;
+      totalCycles += 12;
+      u8 sub_cmd = *start_ptr;
+      start_ptr += 1;
+      u32 value = Common::FromBigEndian<u32>(*((u32*)start_ptr));
+      start_ptr += 4;
+      LoadCPReg(sub_cmd, value, false);
+      INCSTAT(stats.thisFrame.numCPLoads);
+    }
+    break;
+
+    case OpcodeDecoder::GX_LOAD_XF_REG:
+    {
+      if (end_ptr - start_ptr < 4)
+        goto end;
+      u32 Cmd2 = Common::FromBigEndian<u32>(*((u32*)start_ptr));
+      start_ptr += 4;
+      int transfer_size = ((Cmd2 >> 16) & 15) + 1;
+      if (end_ptr - start_ptr < (int)(transfer_size * sizeof(u32)))
+        goto end;
+      totalCycles += 18 + 6 * transfer_size;
+      u32 xf_address = Cmd2 & 0xFFFF;
+      LoadXFReg(transfer_size, xf_address, DataReader(start_ptr, end_ptr));
+      INCSTAT(stats.thisFrame.numXFLoads);
+      start_ptr += 4 * (transfer_size);
+    }
+    break;
+
+    case OpcodeDecoder::GX_LOAD_INDX_A:  // used for position matrices
+      refarray = 0xC;
+      goto load_indx;
+    case OpcodeDecoder::GX_LOAD_INDX_B:  // used for normal matrices
+      refarray = 0xD;
+      goto load_indx;
+    case OpcodeDecoder::GX_LOAD_INDX_C:  // used for postmatrices
+      refarray = 0xE;
+      goto load_indx;
+    case OpcodeDecoder::GX_LOAD_INDX_D:  // used for lights
+      refarray = 0xF;
+      goto load_indx;
+    load_indx:
+      if (end_ptr - start_ptr < 4)
+        goto end;
+      totalCycles += 6;
+      LoadIndexedXF(Common::FromBigEndian<u32>(*((u32*)start_ptr)), refarray);
+      start_ptr += 4;
+      break;
+
+    case OpcodeDecoder::GX_CMD_CALL_DL:
+    {
+      if (end_ptr - start_ptr < 8)
+        goto end;
+      u32 address = Common::FromBigEndian<u32>(*((u32*)start_ptr));
+      start_ptr += 4;
+      u32 count = Common::FromBigEndian<u32>(*((u32*)start_ptr));
+      start_ptr += 4;
+      totalCycles += 6 + OpcodeDecoder::InterpretDisplayList(address, count);
+    }
+    break;
+
+    case OpcodeDecoder::GX_CMD_UNKNOWN_METRICS:  // zelda 4 swords calls it and checks the metrics
+                                                 // registers after that
+      totalCycles += 6;
+      DEBUG_LOG(VIDEO, "GX 0x44: %08x", cmd_byte);
+      break;
+
+    case OpcodeDecoder::GX_CMD_INVL_VC:  // Invalidate Vertex Cache
+      totalCycles += 6;
+      DEBUG_LOG(VIDEO, "Invalidate (vertex cache?)");
+      break;
+
+    case OpcodeDecoder::GX_LOAD_BP_REG:
+      // In skipped_frame case: We have to let BP writes through because they set
+      // tokens and stuff.  TODO: Call a much simplified LoadBPReg instead.
+      {
+        if (end_ptr - start_ptr < 4)
+          goto end;
+        totalCycles += 12;
+        u32 bp_cmd = Common::FromBigEndian<u32>(*((u32*)start_ptr));
+        start_ptr += 4;
+        LoadBPReg(bp_cmd);
+        INCSTAT(stats.thisFrame.numBPLoads);
+      }
+      break;
+
+    // draw primitives
+    default:
+      if ((cmd_byte & 0xC0) == 0x80)
+      {
+        // load vertices
+        if (end_ptr - start_ptr < 2)
+          goto end;
+        u16 num_vertices = Common::FromBigEndian<u16>(*((u16*)start_ptr));
+        start_ptr += 2;
+        if (num_vertices > 0)
+        {
+          int bytes = VertexLoaderManager::RunVertices(
+              cmd_byte & OpcodeDecoder::GX_VAT_MASK,  // Vertex loader index (0 - 7)
+              (cmd_byte & OpcodeDecoder::GX_PRIMITIVE_MASK) >> OpcodeDecoder::GX_PRIMITIVE_SHIFT,
+              num_vertices, DataReader(start_ptr, end_ptr));
+
+          if (bytes < 0)
+            goto end;
+
+          start_ptr += (bytes);
+
+          // 4 GPU ticks per vertex, 3 CPU ticks per GPU tick
+          totalCycles += num_vertices * 4 * 3 + 6;
+        }
+      }
+      else
+      {
+        CommandProcessor::HandleUnknownOpcode(cmd_byte, opcodeStart, false);
+        ERROR_LOG(VIDEO, "FIFO: Unknown Opcode(0x%02x @ %p, preprocessing = no)", cmd_byte,
+                  opcodeStart);
+        totalCycles += 1;
+      }
+      break;
+    }
+  }
+
+end:
+  cycles = totalCycles;
+  s_video_buffer_read_ptr = opcodeStart;
+}
+
 // Description: Main FIFO update loop
 // Purpose: Keep the Core HW updated about the CPU-GPU distance
 void RunGpuLoop()
@@ -370,8 +543,8 @@ void RunGpuLoop()
           // See comment in SyncGPU
           if (write_ptr > seen_ptr)
           {
-            s_video_buffer_read_ptr =
-                OpcodeDecoder::Run(DataReader(s_video_buffer_read_ptr, write_ptr), nullptr, false);
+            u32 cyclesExecuted = 0;
+            OpcodeDecoderRun(cyclesExecuted);
             s_video_buffer_seen_ptr = write_ptr;
           }
         }
@@ -391,27 +564,7 @@ void RunGpuLoop()
               break;
 
             u32 cyclesExecuted = 0;
-            u32 readPtr = fifo.CPReadPointer;
-            u32 stepSize = ReadDataFromFifo(readPtr);
-
-            if (readPtr == fifo.CPEnd)
-              readPtr = fifo.CPBase;
-            else
-              readPtr += stepSize;
-
-            ASSERT_MSG(COMMANDPROCESSOR, (s32)fifo.CPReadWriteDistance - stepSize >= 0,
-                       "Negative fifo.CPReadWriteDistance = %i in FIFO Loop !\nThat can produce "
-                       "instability in the game. Please report it.",
-                       fifo.CPReadWriteDistance - stepSize);
-
-            u8* write_ptr = s_video_buffer_write_ptr;
-            s_video_buffer_read_ptr = OpcodeDecoder::Run(
-                DataReader(s_video_buffer_read_ptr, write_ptr), &cyclesExecuted, false);
-
-            Common::AtomicStore(fifo.CPReadPointer, readPtr);
-            Common::AtomicAdd(fifo.CPReadWriteDistance, -(s32)stepSize);
-            if ((write_ptr - s_video_buffer_read_ptr) == 0)
-              Common::AtomicStore(fifo.SafeCPReadPointer, fifo.CPReadPointer);
+            OpcodeDecoderRun(cyclesExecuted);
 
             CommandProcessor::SetCPStatusFromGPU();
 
@@ -419,8 +572,7 @@ void RunGpuLoop()
             {
               cyclesExecuted = (int)(cyclesExecuted / param.fSyncGpuOverclock);
               int old = s_sync_ticks.fetch_sub(cyclesExecuted);
-              if (old >= param.iSyncGpuMaxDistance &&
-                  old - (int)cyclesExecuted < param.iSyncGpuMaxDistance)
+              if (old >= param.iSyncGpuMaxDistance && old - (int)cyclesExecuted < param.iSyncGpuMaxDistance)
                 s_sync_wakeup_event.Set();
             }
 
@@ -501,11 +653,17 @@ static int RunGpuOnCpu(int ticks)
   while (fifo.bFF_GPReadEnable && fifo.CPReadWriteDistance && !AtBreakpoint() &&
          available_ticks >= 0)
   {
-    u32 step_size = 32;
     if (s_use_deterministic_gpu_thread)
     {
-      step_size = ReadDataFromFifoOnCPU(fifo.CPReadPointer);
+      u32 step_size = ReadDataFromFifoOnCPU(fifo.CPReadPointer);
       s_gpu_mainloop.Wakeup();
+
+      if (fifo.CPReadPointer == fifo.CPEnd)
+        fifo.CPReadPointer = fifo.CPBase;
+      else
+        fifo.CPReadPointer += step_size;
+
+      fifo.CPReadWriteDistance -= step_size;
     }
     else
     {
@@ -515,19 +673,10 @@ static int RunGpuOnCpu(int ticks)
         FPURoundMode::LoadDefaultSIMDState();
         reset_simd_state = true;
       }
-      step_size = ReadDataFromFifo(fifo.CPReadPointer);
       u32 cycles = 0;
-      s_video_buffer_read_ptr = OpcodeDecoder::Run(
-          DataReader(s_video_buffer_read_ptr, s_video_buffer_write_ptr), &cycles, false);
+      OpcodeDecoderRun(cycles);
       available_ticks -= cycles;
     }
-
-    if (fifo.CPReadPointer == fifo.CPEnd)
-      fifo.CPReadPointer = fifo.CPBase;
-    else
-      fifo.CPReadPointer += step_size;
-
-    fifo.CPReadWriteDistance -= step_size;
   }
 
   CommandProcessor::SetCPStatusFromGPU();

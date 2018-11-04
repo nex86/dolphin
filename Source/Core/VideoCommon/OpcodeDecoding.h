@@ -53,6 +53,8 @@ enum
 
 void Init();
 
+u32 InterpretDisplayList(u32 address, u32 size);
+
 template <bool is_preprocess = false>
 u8* Run(DataReader src, u32* cycles, bool in_display_list);
 
