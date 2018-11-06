@@ -289,159 +289,58 @@ void ResetVideoBuffer()
   s_fifo_aux_read_ptr = s_fifo_aux_data;
 }
 
-static void FifoFlushMemory(u8* start_ptr)
-{
-  if (start_ptr >= s_video_buffer && start_ptr <= s_video_buffer + FIFO_SIZE)
-  {
-    s_video_buffer_read_ptr = start_ptr;
-  }
-  else
-  {
-    CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
-    u8* init_ptr = Memory::GetPointer(fifo.CPReadPointer);
-    int used_size = (int)(start_ptr - init_ptr);
-    fifo.CPReadPointer += used_size;
-    fifo.CPReadWriteDistance -= used_size;
-  }
-}
-
-bool FifoReserveMemory(u8*& start_ptr, u8*& end_ptr, u32 need_size)
+static bool FifoReserveMemory(u8*& start_ptr, u8*& end_ptr, u32 need_size)
 {
   if (end_ptr - start_ptr >= need_size)
-  {
     return true;
-  }
 
   CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
 
-  ASSERT_MSG(COMMANDPROCESSOR, (s32)fifo.CPReadWriteDistance >= 0,
-             "Negative fifo.CPReadWriteDistance = %i in FIFO Loop !\nThat can produce "
-             "instability in the game. Please report it.",
-             fifo.CPReadWriteDistance);
-
-  u8* init_ptr;
-  bool copy_all_data;
-  bool copy_to_video_buffer = false;
-  if (start_ptr == end_ptr)
+  bool result = true;
+  // align to 32 bytes
+  need_size = (need_size + 0x1F) & ~0x1F;
+  if (need_size > fifo.CPReadWriteDistance)
   {
-    if (start_ptr >= s_video_buffer && start_ptr <= s_video_buffer + FIFO_SIZE)
-    {
-      s_video_buffer_read_ptr = s_video_buffer_write_ptr;
-    }
-    // non used data, don't copy
-    copy_all_data = false;
-    init_ptr = start_ptr;
-  }
-  else if (start_ptr >= s_video_buffer && start_ptr <= s_video_buffer + FIFO_SIZE)
-  {
-    // used data already in video buffer, copy remaining data to video buffer
-    copy_to_video_buffer = true;
-    copy_all_data = false;
-    init_ptr = s_video_buffer_read_ptr;
-  }
-  else
-  {
-    // there is used data in fifo memory, copy all data to video buffer
-    copy_all_data = true;
-    init_ptr = Memory::GetPointer(fifo.CPReadPointer);
-  }
-
-  bool result;
-  u32 used_size = start_ptr - init_ptr;
-  u32 total_size = used_size + need_size;
-  u32 page_size = fifo.CPEnd - fifo.CPReadPointer + 32;
-  u8* write_ptr = s_video_buffer_write_ptr;
-
-  if (total_size > fifo.CPReadWriteDistance)
-  {
-    total_size = fifo.CPReadWriteDistance;
+    need_size = fifo.CPReadWriteDistance;
     result = false;
-    copy_to_video_buffer = true;
-  }
-  else
-  {
-    // align to 32 bytes
-    total_size = (total_size + 0x1F) & ~0x1F;
-    need_size = (need_size + 0x1F) & ~0x1F;
-    if (total_size > fifo.CPReadWriteDistance)
-    {
-      total_size = fifo.CPReadWriteDistance;
-    }
-    if (need_size > fifo.CPReadWriteDistance)
-    {
-      need_size = fifo.CPReadWriteDistance;
-    }
-    result = true;
   }
 
-  if (page_size < total_size)
+  u8* write_ptr = s_video_buffer_write_ptr;
+  u32 buff_size = s_video_buffer + FIFO_SIZE - write_ptr;
+  if (buff_size < need_size)
   {
-    u32 copy_size = copy_all_data ? total_size : need_size;
-    // need size is bigger than current fifo memory page,
-    // so copy from fifo memory to video buffer
-    u32 remain_size = copy_size - page_size;
-    u32 buff_size = s_video_buffer + FIFO_SIZE - write_ptr;
-    if (buff_size < copy_size)
-    {
-      // move memory
-      u32 data_size = write_ptr - s_video_buffer_read_ptr;
-      memmove(s_video_buffer, s_video_buffer_read_ptr, data_size);
-      s_video_buffer_read_ptr = s_video_buffer;
-      write_ptr = s_video_buffer + data_size;
-    }
+    // move memory
+    u32 data_size = write_ptr - s_video_buffer_read_ptr;
+    memmove(s_video_buffer, s_video_buffer_read_ptr, data_size);
+    start_ptr = s_video_buffer + (start_ptr - s_video_buffer_read_ptr);
+    s_video_buffer_read_ptr = s_video_buffer;
+    write_ptr = s_video_buffer + data_size;
+  }
 
+  u32 page_size = fifo.CPEnd - fifo.CPReadPointer + 32;
+  if (page_size < need_size)
+  {
     // read current page
     Memory::CopyFromEmu(write_ptr, fifo.CPReadPointer, page_size);
     fifo.CPReadPointer = fifo.CPBase;
     fifo.CPReadWriteDistance -= page_size;
     write_ptr += page_size;
-
-    // read next page
-    Memory::CopyFromEmu(write_ptr, fifo.CPBase, remain_size);
-    fifo.CPReadPointer += remain_size;
-    fifo.CPReadWriteDistance -= remain_size;
-    write_ptr += remain_size;
-
-    s_video_buffer_write_ptr = write_ptr;
-    start_ptr = s_video_buffer_read_ptr + used_size;
-    end_ptr = write_ptr;
+    need_size -= page_size;
   }
-  else if (copy_to_video_buffer)
-  {
-    u32 copy_size = copy_all_data ? total_size : need_size;
-    // process remain data in video buffer
-    u32 buff_size = s_video_buffer + FIFO_SIZE - write_ptr;
-    if (buff_size < copy_size)
-    {
-      // move memory
-      u32 data_size = write_ptr - s_video_buffer_read_ptr;
-      memmove(s_video_buffer, s_video_buffer_read_ptr, data_size);
-      s_video_buffer_read_ptr = s_video_buffer;
-      write_ptr = s_video_buffer + data_size;
-    }
 
-    Memory::CopyFromEmu(write_ptr, fifo.CPReadPointer, copy_size);
-    fifo.CPReadPointer += copy_size;
-    fifo.CPReadWriteDistance -= copy_size;
-    write_ptr += copy_size;
-    s_video_buffer_write_ptr = write_ptr;
-    start_ptr = s_video_buffer_read_ptr + used_size;
-    end_ptr = write_ptr;
-  }
-  else
-  {
-    // use fifo memory directly
-    start_ptr = Memory::GetPointer(fifo.CPReadPointer + used_size);
-    end_ptr = Memory::GetPointer(fifo.CPReadPointer + total_size);
-  }
+  Memory::CopyFromEmu(write_ptr, fifo.CPReadPointer, need_size);
+  fifo.CPReadPointer += need_size;
+  fifo.CPReadWriteDistance -= need_size;
+  write_ptr += need_size;
+
+  s_video_buffer_write_ptr = write_ptr;
+  end_ptr = write_ptr;
 
   return result;
 }
 
 void OpcodeDecoderRun(int& cycles)
 {
-  CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
-
   int refarray;
   int totalCycles = 1;
   u8* start_ptr = s_video_buffer_read_ptr;
@@ -585,13 +484,14 @@ void OpcodeDecoderRun(int& cycles)
       break;
     }
 
-    FifoFlushMemory(start_ptr);
+    s_video_buffer_read_ptr = start_ptr;
     if (cycles < totalCycles)
       break;
   }
 
 end:
   cycles -= totalCycles;
+  CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
   Common::AtomicStore(fifo.SafeCPReadPointer, fifo.CPReadPointer);
 }
 
@@ -640,9 +540,9 @@ void RunGpuLoop()
             if (param.bSyncGPU && s_sync_ticks.load() < param.iSyncGpuMinDistance)
               break;
 
-            int availableCycles = 100;
+            int availableCycles = 1000;
             OpcodeDecoderRun(availableCycles);
-            int cyclesExecuted = 100 - availableCycles;
+            int cyclesExecuted = 1000 - availableCycles;
 
             CommandProcessor::SetCPStatusFromGPU();
 
