@@ -139,7 +139,7 @@ NativeVertexFormat* GetOrCreateMatchingFormat(const PortableVertexDeclaration& d
   return iter->second.get();
 }
 
-NativeVertexFormat* GetUberVertexFormat(const PortableVertexDeclaration& decl)
+/*NativeVertexFormat* GetUberVertexFormat(const PortableVertexDeclaration& decl)
 {
   // The padding in the structs can cause the memcmp() in the map to create duplicates.
   // Avoid this by initializing the padding to zero.
@@ -193,7 +193,7 @@ NativeVertexFormat* GetUberVertexFormat(const PortableVertexDeclaration& decl)
     MakeDummyAttribute(new_decl.posmtx, VAR_UNSIGNED_BYTE, 1, true);
 
   return GetOrCreateMatchingFormat(new_decl);
-}
+}*/
 
 static VertexLoaderBase* RefreshLoader(int vtx_attr_group, bool preprocess = false)
 {
@@ -248,26 +248,14 @@ static VertexLoaderBase* RefreshLoader(int vtx_attr_group, bool preprocess = fal
   return loader;
 }
 
-int RunVerticesPreprocess(int vtx_attr_group, int primitive, int count, const DataReader& src)
+int GetVertexSize(int vtx_attr_group, bool preprocess)
 {
-  VertexLoaderBase* loader = RefreshLoader(vtx_attr_group, true);
-  int size = count * loader->m_VertexSize;
-  if ((int)src.size() < size)
-  {
-    return -1;
-  }
-
-  return size;
+  return RefreshLoader(vtx_attr_group, preprocess)->m_VertexSize;
 }
 
-int RunVertices(int vtx_attr_group, int primitive, int count, const DataReader& src)
+void RunVertices(int vtx_attr_group, int primitive, int count, const DataReader& src)
 {
   VertexLoaderBase* loader = RefreshLoader(vtx_attr_group, false);
-  int size = count * loader->m_VertexSize;
-  if ((int)src.size() < size)
-  {
-    return -1;
-  }
 
   // If the native vertex format changed, force a flush.
   if (loader->m_native_vertex_format != s_current_vtx_fmt ||
@@ -295,7 +283,6 @@ int RunVertices(int vtx_attr_group, int primitive, int count, const DataReader& 
 
   ADDSTAT(stats.thisFrame.numPrims, count);
   INCSTAT(stats.thisFrame.numPrimitiveJoins);
-  return size;
 }
 
 NativeVertexFormat* GetCurrentVertexFormat()

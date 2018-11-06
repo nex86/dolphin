@@ -223,19 +223,22 @@ u8* Run(DataReader src, u32* cycles, bool in_display_list)
         u16 num_vertices = src.Read<u16>();
         if(num_vertices > 0)
         {
+          int vtx_attr_group = cmd_byte & GX_VAT_MASK; // Vertex loader index (0 - 7)
           int bytes;
-
-          if(is_preprocess)
-            bytes = VertexLoaderManager::RunVerticesPreprocess(
-              cmd_byte & GX_VAT_MASK,  // Vertex loader index (0 - 7)
-              (cmd_byte & GX_PRIMITIVE_MASK) >> GX_PRIMITIVE_SHIFT, num_vertices, src);
+          if (is_preprocess)
+          {
+            bytes = VertexLoaderManager::GetVertexSize(vtx_attr_group, true) * num_vertices;
+            if (src.size() < bytes)
+              goto end;
+          }
           else
-            bytes = VertexLoaderManager::RunVertices(
-              cmd_byte & GX_VAT_MASK,  // Vertex loader index (0 - 7)
-              (cmd_byte & GX_PRIMITIVE_MASK) >> GX_PRIMITIVE_SHIFT, num_vertices, src);
-
-          if (bytes < 0)
-            goto end;
+          {
+            int primitive = (cmd_byte & GX_PRIMITIVE_MASK) >> GX_PRIMITIVE_SHIFT;
+            bytes = VertexLoaderManager::GetVertexSize(vtx_attr_group, false) * num_vertices;
+            if (src.size() < bytes)
+              goto end;
+            VertexLoaderManager::RunVertices(vtx_attr_group, primitive, num_vertices, src);
+          }
 
           src.Skip(bytes);
 

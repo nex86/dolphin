@@ -6,7 +6,6 @@
 
 #include <atomic>
 #include <cstring>
-#include <android/log.h>
 
 #include "Common/Assert.h"
 #include "Common/Atomic.h"
@@ -290,75 +289,99 @@ void ResetVideoBuffer()
   s_fifo_aux_read_ptr = s_fifo_aux_data;
 }
 
-static void FlushMemoryFromFifo(u8* start_ptr)
+static void FifoFlushMemory(u8* start_ptr)
 {
-  u8* write_ptr = s_video_buffer_write_ptr;
-  CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
-  __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[Flush] start_ptr: 0x%08x, video_start: 0x%08x, video_end: 0x%08x, Distance: %u", start_ptr, s_video_buffer_read_ptr, write_ptr, fifo.CPReadWriteDistance);
-  if (start_ptr >= s_video_buffer_read_ptr && start_ptr <= write_ptr)
+  if (start_ptr >= s_video_buffer && start_ptr <= s_video_buffer + FIFO_SIZE)
   {
-    int prev_size = (int)(start_ptr - s_video_buffer_read_ptr);
     s_video_buffer_read_ptr = start_ptr;
-    __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[Flush] video prev_size: %d, start_ptr: 0x%08x, Distance: %u", prev_size, start_ptr, fifo.CPReadWriteDistance);
   }
   else
   {
-    u8* prev_ptr = Memory::GetPointer(fifo.CPReadPointer);
-    int prev_size = (int)(start_ptr - prev_ptr);
-    fifo.CPReadPointer += prev_size;
-    fifo.CPReadWriteDistance -= prev_size;
-    __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[Flush] fifo prev_size: %d, start_ptr: 0x%08x, Distance: %u", prev_size, start_ptr, fifo.CPReadWriteDistance);
+    CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
+    u8* init_ptr = Memory::GetPointer(fifo.CPReadPointer);
+    int used_size = (int)(start_ptr - init_ptr);
+    fifo.CPReadPointer += used_size;
+    fifo.CPReadWriteDistance -= used_size;
   }
 }
 
-bool ReserveMemoryFromFifo(u8*& start_ptr, u8*& end_ptr, u32 need_size)
+bool FifoReserveMemory(u8*& start_ptr, u8*& end_ptr, u32 need_size)
 {
   if (end_ptr - start_ptr >= need_size)
   {
-    __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[Reserve] 000 start_ptr: 0x%08x, end_ptr: 0x%08x, need_size: %u", start_ptr, end_ptr, need_size);
     return true;
   }
 
-  FlushMemoryFromFifo(start_ptr);
-
-  bool result;
-  bool copy_to_video_buffer;
-  u8* write_ptr = s_video_buffer_write_ptr;
   CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
-  if (need_size > fifo.CPReadWriteDistance)
-  {
-    need_size = fifo.CPReadWriteDistance;
-    if(need_size == 0)
-      return false;
-
-    result = false;
-    copy_to_video_buffer = true;
-  }
-  else
-  {
-    // align to 32 bytes
-    need_size = (need_size + 0x1F) & ~0x1F;
-    if (need_size > fifo.CPReadWriteDistance)
-    {
-      need_size = fifo.CPReadWriteDistance;
-    }
-    result = true;
-    copy_to_video_buffer = (s_video_buffer_read_ptr < write_ptr);
-  }
 
   ASSERT_MSG(COMMANDPROCESSOR, (s32)fifo.CPReadWriteDistance >= 0,
              "Negative fifo.CPReadWriteDistance = %i in FIFO Loop !\nThat can produce "
              "instability in the game. Please report it.",
              fifo.CPReadWriteDistance);
 
-  u32 page_size = fifo.CPEnd - fifo.CPReadPointer + 32;
-  if (page_size < need_size)
+  u8* init_ptr;
+  bool copy_all_data;
+  bool copy_to_video_buffer = false;
+  if (start_ptr == end_ptr)
   {
+    if (start_ptr >= s_video_buffer && start_ptr <= s_video_buffer + FIFO_SIZE)
+    {
+      s_video_buffer_read_ptr = s_video_buffer_write_ptr;
+    }
+    // non used data, don't copy
+    copy_all_data = false;
+    init_ptr = start_ptr;
+  }
+  else if (start_ptr >= s_video_buffer && start_ptr <= s_video_buffer + FIFO_SIZE)
+  {
+    // used data already in video buffer, copy remaining data to video buffer
+    copy_to_video_buffer = true;
+    copy_all_data = false;
+    init_ptr = s_video_buffer_read_ptr;
+  }
+  else
+  {
+    // there is used data in fifo memory, copy all data to video buffer
+    copy_all_data = true;
+    init_ptr = Memory::GetPointer(fifo.CPReadPointer);
+  }
+
+  bool result;
+  u32 used_size = start_ptr - init_ptr;
+  u32 total_size = used_size + need_size;
+  u32 page_size = fifo.CPEnd - fifo.CPReadPointer + 32;
+  u8* write_ptr = s_video_buffer_write_ptr;
+
+  if (total_size > fifo.CPReadWriteDistance)
+  {
+    total_size = fifo.CPReadWriteDistance;
+    result = false;
+    copy_to_video_buffer = true;
+  }
+  else
+  {
+    // align to 32 bytes
+    total_size = (total_size + 0x1F) & ~0x1F;
+    need_size = (need_size + 0x1F) & ~0x1F;
+    if (total_size > fifo.CPReadWriteDistance)
+    {
+      total_size = fifo.CPReadWriteDistance;
+    }
+    if (need_size > fifo.CPReadWriteDistance)
+    {
+      need_size = fifo.CPReadWriteDistance;
+    }
+    result = true;
+  }
+
+  if (page_size < total_size)
+  {
+    u32 copy_size = copy_all_data ? total_size : need_size;
     // need size is bigger than current fifo memory page,
     // so copy from fifo memory to video buffer
-    u32 remain_size = need_size - page_size;
+    u32 remain_size = copy_size - page_size;
     u32 buff_size = s_video_buffer + FIFO_SIZE - write_ptr;
-    if (buff_size < need_size)
+    if (buff_size < copy_size)
     {
       // move memory
       u32 data_size = write_ptr - s_video_buffer_read_ptr;
@@ -369,26 +392,26 @@ bool ReserveMemoryFromFifo(u8*& start_ptr, u8*& end_ptr, u32 need_size)
 
     // read current page
     Memory::CopyFromEmu(write_ptr, fifo.CPReadPointer, page_size);
-    write_ptr += page_size;
     fifo.CPReadPointer = fifo.CPBase;
+    fifo.CPReadWriteDistance -= page_size;
+    write_ptr += page_size;
 
     // read next page
-    Memory::CopyFromEmu(write_ptr, fifo.CPReadPointer, remain_size);
-    write_ptr += remain_size;
+    Memory::CopyFromEmu(write_ptr, fifo.CPBase, remain_size);
     fifo.CPReadPointer += remain_size;
+    fifo.CPReadWriteDistance -= remain_size;
+    write_ptr += remain_size;
 
-    fifo.CPReadWriteDistance -= need_size;
     s_video_buffer_write_ptr = write_ptr;
-
-    start_ptr = s_video_buffer_read_ptr;
+    start_ptr = s_video_buffer_read_ptr + used_size;
     end_ptr = write_ptr;
-    __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[Reserve] aaa start_ptr: 0x%08x, end_ptr: 0x%08x, need_size: %u, Distance: %u, result: %d", start_ptr, end_ptr, need_size, fifo.CPReadWriteDistance, result);
   }
   else if (copy_to_video_buffer)
   {
+    u32 copy_size = copy_all_data ? total_size : need_size;
     // process remain data in video buffer
     u32 buff_size = s_video_buffer + FIFO_SIZE - write_ptr;
-    if (buff_size < need_size)
+    if (buff_size < copy_size)
     {
       // move memory
       u32 data_size = write_ptr - s_video_buffer_read_ptr;
@@ -397,21 +420,19 @@ bool ReserveMemoryFromFifo(u8*& start_ptr, u8*& end_ptr, u32 need_size)
       write_ptr = s_video_buffer + data_size;
     }
 
-    Memory::CopyFromEmu(write_ptr, fifo.CPReadPointer, need_size);
-    write_ptr += need_size;
-    fifo.CPReadPointer += need_size;
-    fifo.CPReadWriteDistance -= need_size;
+    Memory::CopyFromEmu(write_ptr, fifo.CPReadPointer, copy_size);
+    fifo.CPReadPointer += copy_size;
+    fifo.CPReadWriteDistance -= copy_size;
+    write_ptr += copy_size;
     s_video_buffer_write_ptr = write_ptr;
-    start_ptr = s_video_buffer_read_ptr;
+    start_ptr = s_video_buffer_read_ptr + used_size;
     end_ptr = write_ptr;
-    __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[Reserve] bbb start_ptr: 0x%08x, end_ptr: 0x%08x, need_size: %u, Distance: %u, result: %d", start_ptr, end_ptr, need_size, fifo.CPReadWriteDistance, result);
   }
   else
   {
     // use fifo memory directly
-    start_ptr = Memory::GetPointer(fifo.CPReadPointer);
-    end_ptr = Memory::GetPointer(fifo.CPReadPointer + need_size);
-    __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[Reserve] ccc start_ptr: 0x%08x, end_ptr: 0x%08x, need_size: %u, Distance: %u, result: %d", start_ptr, end_ptr, need_size, fifo.CPReadWriteDistance, result);
+    start_ptr = Memory::GetPointer(fifo.CPReadPointer + used_size);
+    end_ptr = Memory::GetPointer(fifo.CPReadPointer + total_size);
   }
 
   return result;
@@ -419,14 +440,15 @@ bool ReserveMemoryFromFifo(u8*& start_ptr, u8*& end_ptr, u32 need_size)
 
 void OpcodeDecoderRun(int& cycles)
 {
+  CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
+
   int refarray;
   int totalCycles = 1;
   u8* start_ptr = s_video_buffer_read_ptr;
   u8* end_ptr = s_video_buffer_write_ptr;
-  __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[OpcodeDecoderRun] start start_ptr: 0x%08x", start_ptr);
   while (true)
   {
-    if (!ReserveMemoryFromFifo(start_ptr, end_ptr, 1))
+    if (!FifoReserveMemory(start_ptr, end_ptr, 1))
       goto end;
 
     u8 cmd_byte = *start_ptr;
@@ -445,7 +467,7 @@ void OpcodeDecoderRun(int& cycles)
 
     case OpcodeDecoder::GX_LOAD_CP_REG:
     {
-      if (!ReserveMemoryFromFifo(start_ptr, end_ptr, 1 + 4))
+      if (!FifoReserveMemory(start_ptr, end_ptr, 1 + 4))
         goto end;
       totalCycles += 12;
       u8 sub_cmd = *start_ptr;
@@ -459,12 +481,12 @@ void OpcodeDecoderRun(int& cycles)
 
     case OpcodeDecoder::GX_LOAD_XF_REG:
     {
-      if (!ReserveMemoryFromFifo(start_ptr, end_ptr, 4))
+      if (!FifoReserveMemory(start_ptr, end_ptr, 4))
         goto end;
       u32 Cmd2 = Common::FromBigEndian<u32>(*((u32*)start_ptr));
       start_ptr += 4;
       int transfer_size = ((Cmd2 >> 16) & 15) + 1;
-      if (!ReserveMemoryFromFifo(start_ptr, end_ptr, transfer_size * sizeof(u32)))
+      if (!FifoReserveMemory(start_ptr, end_ptr, transfer_size * sizeof(u32)))
         goto end;
       totalCycles += 18 + 6 * transfer_size;
       u32 xf_address = Cmd2 & 0xFFFF;
@@ -487,7 +509,7 @@ void OpcodeDecoderRun(int& cycles)
       refarray = 0xF;
       goto load_indx;
     load_indx:
-      if (!ReserveMemoryFromFifo(start_ptr, end_ptr, 4))
+      if (!FifoReserveMemory(start_ptr, end_ptr, 4))
         goto end;
       totalCycles += 6;
       LoadIndexedXF(Common::FromBigEndian<u32>(*((u32*)start_ptr)), refarray);
@@ -496,7 +518,7 @@ void OpcodeDecoderRun(int& cycles)
 
     case OpcodeDecoder::GX_CMD_CALL_DL:
     {
-      if (!ReserveMemoryFromFifo(start_ptr, end_ptr, 8))
+      if (!FifoReserveMemory(start_ptr, end_ptr, 8))
         goto end;
       u32 address = Common::FromBigEndian<u32>(*((u32*)start_ptr));
       start_ptr += 4;
@@ -521,7 +543,7 @@ void OpcodeDecoderRun(int& cycles)
       // In skipped_frame case: We have to let BP writes through because they set
       // tokens and stuff.  TODO: Call a much simplified LoadBPReg instead.
       {
-        if (!ReserveMemoryFromFifo(start_ptr, end_ptr, 4))
+        if (!FifoReserveMemory(start_ptr, end_ptr, 4))
           goto end;
         totalCycles += 12;
         u32 bp_cmd = Common::FromBigEndian<u32>(*((u32*)start_ptr));
@@ -536,22 +558,20 @@ void OpcodeDecoderRun(int& cycles)
       if ((cmd_byte & 0xC0) == 0x80)
       {
         // load vertices
-        if (!ReserveMemoryFromFifo(start_ptr, end_ptr, 2))
+        if (!FifoReserveMemory(start_ptr, end_ptr, 2))
           goto end;
         u16 num_vertices = Common::FromBigEndian<u16>(*((u16*)start_ptr));
         start_ptr += 2;
         if (num_vertices > 0)
         {
-          int bytes = VertexLoaderManager::RunVertices(
-              cmd_byte & OpcodeDecoder::GX_VAT_MASK,  // Vertex loader index (0 - 7)
-              (cmd_byte & OpcodeDecoder::GX_PRIMITIVE_MASK) >> OpcodeDecoder::GX_PRIMITIVE_SHIFT,
-              num_vertices, DataReader(start_ptr, end_ptr));
-
-          if (!ReserveMemoryFromFifo(start_ptr, end_ptr, bytes))
+          int vtx_attr_group = cmd_byte & OpcodeDecoder::GX_VAT_MASK;  // Vertex loader index (0 - 7)
+          int primitive = (cmd_byte & OpcodeDecoder::GX_PRIMITIVE_MASK) >> OpcodeDecoder::GX_PRIMITIVE_SHIFT;
+          int bytes = VertexLoaderManager::GetVertexSize(vtx_attr_group) * num_vertices;
+          if (!FifoReserveMemory(start_ptr, end_ptr, bytes))
             goto end;
-
+          // draw vertices
+          VertexLoaderManager::RunVertices(vtx_attr_group, primitive, num_vertices, DataReader(start_ptr, end_ptr));
           start_ptr += bytes;
-
           // 4 GPU ticks per vertex, 3 CPU ticks per GPU tick
           totalCycles += num_vertices * 4 * 3 + 6;
         }
@@ -559,25 +579,20 @@ void OpcodeDecoderRun(int& cycles)
       else
       {
         CommandProcessor::HandleUnknownOpcode(cmd_byte, s_video_buffer_read_ptr, false);
-        ERROR_LOG(VIDEO, "FIFO: Unknown Opcode(0x%02x @ %p, preprocessing = no)", cmd_byte,
-                  s_video_buffer_read_ptr);
+        ERROR_LOG(VIDEO, "FIFO: Unknown Opcode(0x%02x @ %p, preprocessing = no)", cmd_byte, s_video_buffer_read_ptr);
         totalCycles += 1;
       }
       break;
     }
 
+    FifoFlushMemory(start_ptr);
     if (cycles < totalCycles)
-    {
       break;
-    }
   }
 
-  FlushMemoryFromFifo(start_ptr);
 end:
   cycles -= totalCycles;
-  CommandProcessor::SCPFifoStruct& fifo = CommandProcessor::fifo;
   Common::AtomicStore(fifo.SafeCPReadPointer, fifo.CPReadPointer);
-  __android_log_print(ANDROID_LOG_INFO, "zhangwei", "[OpcodeDecoderRun] end start_ptr: 0x%08x", start_ptr);
 }
 
 // Description: Main FIFO update loop

@@ -32,11 +32,12 @@ NativeVertexFormat* GetOrCreateMatchingFormat(const PortableVertexDeclaration& d
 // For vertex ubershaders, all attributes need to be present, even when the vertex
 // format does not contain them. This function returns a vertex format with dummy
 // offsets set to the unused attributes.
-NativeVertexFormat* GetUberVertexFormat(const PortableVertexDeclaration& decl);
+//NativeVertexFormat* GetUberVertexFormat(const PortableVertexDeclaration& decl);
+
+int GetVertexSize(int vtx_attr_group, bool preprocess = false);
 
 // Returns -1 if buf_size is insufficient, else the amount of bytes consumed
-int RunVertices(int vtx_attr_group, int primitive, int count, const DataReader& src);
-int RunVerticesPreprocess(int vtx_attr_group, int primitive, int count, const DataReader& src);
+void RunVertices(int vtx_attr_group, int primitive, int count, const DataReader& src);
 
 // For debugging
 std::string VertexLoadersToString();
